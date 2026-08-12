@@ -30,7 +30,7 @@ jobs:
 
           if [ ! -f "$ZIP" ]; then
             echo "ERRORE: $ZIP non trovato."
-            echo "File presenti nel repository:"
+            echo "File presenti:"
             find . -maxdepth 2 -type f | sort
             exit 1
           fi
@@ -40,9 +40,7 @@ jobs:
 
           unzip -q "$ZIP" -d android-project
 
-          echo "Progetto estratto."
-          echo "Contenuto:"
-          find android-project -maxdepth 3 -type f | sort | head -200
+          echo "Progetto estratto correttamente."
 
       - name: Trova il progetto Gradle
         shell: bash
@@ -63,17 +61,21 @@ jobs:
               PROJECT_DIR="$DIR"
               break
             fi
-          done < <(find android-project -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" -o -name "gradlew" \) | sort)
+          done < <(find android-project -type f \( \
+            -name "settings.gradle" \
+            -o -name "settings.gradle.kts" \
+            -o -name "gradlew" \
+          \) | sort)
 
           if [ -z "$PROJECT_DIR" ]; then
-            echo "ERRORE: nessun progetto Gradle Android trovato."
+            echo "ERRORE: progetto Gradle non trovato."
             find android-project -maxdepth 5 -type f | sort
             exit 1
           fi
 
           PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
 
-          echo "Progetto Gradle trovato:"
+          echo "Progetto trovato:"
           echo "$PROJECT_DIR"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
@@ -84,13 +86,13 @@ jobs:
           set -e
           cd "$PROJECT_DIR"
 
-          if [ -f "./gradlew" ]; then
-            chmod +x ./gradlew
-            ./gradlew --version
-          else
+          if [ ! -f "./gradlew" ]; then
             echo "ERRORE: gradlew non trovato."
             exit 1
           fi
+
+          chmod +x ./gradlew
+          ./gradlew --version
 
       - name: Compila APK
         shell: bash
@@ -118,7 +120,7 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/apk"
           cp "$APK" "$GITHUB_WORKSPACE/apk/FrontlineCommander-debug.apk"
 
-      - name: Carica APK
+      - name: Pubblica APK
         uses: actions/upload-artifact@v4
         with:
           name: FrontlineCommander-APK
