@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
+      - main
       - principale
 
 jobs:
@@ -25,35 +26,56 @@ jobs:
         run: |
           set -e
 
+          ZIP="FrontlineCommander_FIXED.zip"
+
+          if [ ! -f "$ZIP" ]; then
+            echo "ERRORE: $ZIP non trovato."
+            echo "File presenti nel repository:"
+            find . -maxdepth 2 -type f | sort
+            exit 1
+          fi
+
           rm -rf android-project
           mkdir -p android-project
 
-          echo "Contenuto dello ZIP:"
-          unzip -l FrontlineCommander_FIXED.zip | head -50
+          unzip -q "$ZIP" -d android-project
 
-          echo "Estrazione..."
-          unzip -q FrontlineCommander_FIXED.zip -d android-project
-
-          echo "Progetto estratto:"
-          find android-project -maxdepth 4 -type f \( -name "gradlew" -o -name "settings.gradle" -o -name "settings.gradle.kts" -o -name "build.gradle" -o -name "build.gradle.kts" \) -print
+          echo "Progetto estratto."
+          echo "Contenuto:"
+          find android-project -maxdepth 3 -type f | sort | head -200
 
       - name: Trova il progetto Gradle
         shell: bash
         run: |
           set -e
 
-          GRADLEW=$(find android-project -type f -name "gradlew" | head -n 1)
+          PROJECT_DIR=""
 
-          if [ -z "$GRADLEW" ]; then
-            echo "ERRORE: gradlew non trovato."
-            echo "Contenuto estratto:"
-            find android-project -maxdepth 5 -type f | head -200
+          while IFS= read -r file; do
+            DIR="$(dirname "$file")"
+
+            if [ -f "$DIR/gradlew" ]; then
+              PROJECT_DIR="$DIR"
+              break
+            fi
+
+            if [ -f "$DIR/settings.gradle" ] || [ -f "$DIR/settings.gradle.kts" ]; then
+              PROJECT_DIR="$DIR"
+              break
+            fi
+          done < <(find android-project -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" -o -name "gradlew" \) | sort)
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERRORE: nessun progetto Gradle Android trovato."
+            find android-project -maxdepth 5 -type f | sort
             exit 1
           fi
 
-          PROJECT_DIR=$(dirname "$GRADLEW")
+          PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
 
-          echo "gradlew trovato in: $GRADLEW"
+          echo "Progetto Gradle trovato:"
+          echo "$PROJECT_DIR"
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Configura Gradle
@@ -61,27 +83,44 @@ jobs:
         run: |
           set -e
           cd "$PROJECT_DIR"
-          chmod +x gradlew
-          ./gradlew --version
+
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            ./gradlew --version
+          else
+            echo "ERRORE: gradlew non trovato."
+            exit 1
+          fi
 
       - name: Compila APK
         shell: bash
         run: |
           set -e
           cd "$PROJECT_DIR"
-          chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace
+
+          ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Trova APK generato
         shell: bash
         run: |
-          echo "APK trovati:"
-          find "$PROJECT_DIR" -type f -name "*.apk" -print
+          set -e
+
+          APK="$(find "$PROJECT_DIR" -type f -name "*.apk" | head -1)"
+
+          if [ -z "$APK" ]; then
+            echo "ERRORE: nessun APK generato."
+            exit 1
+          fi
+
+          echo "APK trovato:"
+          echo "$APK"
+
+          mkdir -p "$GITHUB_WORKSPACE/apk"
+          cp "$APK" "$GITHUB_WORKSPACE/apk/FrontlineCommander-debug.apk"
 
       - name: Carica APK
         uses: actions/upload-artifact@v4
         with:
           name: FrontlineCommander-APK
-          path: |
-            **/build/outputs/apk/**/*.apk
+          path: apk/FrontlineCommander-debug.apk
           if-no-files-found: error
