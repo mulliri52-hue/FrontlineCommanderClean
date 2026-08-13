@@ -2,10 +2,9 @@ name: APK completo
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-      - principale
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -16,58 +15,68 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Installa Java 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-
-      - name: Installa Gradle 8.13
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.13'
+          cache: gradle
 
       - name: Estrai il progetto Android
         shell: bash
         run: |
           set -e
-          rm -rf android-project
-          mkdir -p android-project
-          ZIP=""
-          for f in FRONTLINE_READY.zip FRONTLINE_READY*.zip; do
-            if [ -f "$f" ]; then ZIP="$f"; break; fi
-          done
-          if [ -z "$ZIP" ]; then
-            echo "ERRORE: FRONTLINE_READY.zip non trovato."
+          mkdir -p extracted
+          ZIP_FILE="$(find . -maxdepth 2 -type f -iname '*.zip' | head -n 1)"
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERRORE: nessun file ZIP trovato nel repository."
             exit 1
           fi
-          unzip -q "$ZIP" -d android-project
-          test -f android-project/settings.gradle.kts
-          test -f android-project/app/build.gradle.kts
-          test -f android-project/app/src/main/java/com/frontline/commander/MainActivity.kt
+          echo "ZIP trovato: $ZIP_FILE"
+          unzip -q "$ZIP_FILE" -d extracted
 
-      - name: Compila APK
-        working-directory: android-project
+      - name: Trova il progetto Gradle
+        id: project
         shell: bash
         run: |
           set -e
-          gradle assembleDebug --no-daemon --stacktrace
+          GRADLEW="$(find extracted -type f -name 'gradlew' | head -n 1)"
+          if [ -z "$GRADLEW" ]; then
+            echo "ERRORE: gradlew non trovato nel progetto estratto."
+            exit 1
+          fi
+          PROJECT_DIR="$(dirname "$GRADLEW")"
+          echo "Progetto trovato in: $PROJECT_DIR"
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Prepara Gradle Wrapper
+        shell: bash
+        run: |
+          chmod +x "${{ steps.project.outputs.project_dir }}/gradlew"
+
+      - name: Compila APK Debug
+        shell: bash
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        run: |
+          ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Trova APK generato
+        id: apk
         shell: bash
         run: |
           set -e
-          APK="$(find android-project -type f -name '*.apk' -path '*/build/outputs/apk/*' | head -1)"
+          APK="$(find "${{ steps.project.outputs.project_dir }}/app/build/outputs/apk/debug" -type f -name '*.apk' | head -n 1)"
           if [ -z "$APK" ]; then
-            echo "ERRORE: nessun APK generato."
-            find android-project -type f -path '*/build/outputs/*' | sort || true
+            echo "ERRORE: compilazione riuscita ma APK non trovato."
+            find "${{ steps.project.outputs.project_dir }}/app/build/outputs" -type f 2>/dev/null || true
             exit 1
           fi
-          mkdir -p apk
-          cp "$APK" apk/FrontlineCommander-debug.apk
+          echo "APK trovato: $APK"
+          echo "apk_path=$APK" >> "$GITHUB_OUTPUT"
 
       - name: Pubblica APK
         uses: actions/upload-artifact@v4
         with:
           name: FrontlineCommander-APK
-          path: apk/FrontlineCommander-debug.apk
+          path: ${{ steps.apk.outputs.apk_path }}
           if-no-files-found: error
+          retention-days: 7
