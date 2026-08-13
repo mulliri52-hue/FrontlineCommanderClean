@@ -111,11 +111,11 @@ jobs:
 
           mkdir -p "$GITHUB_WORKSPACE/apk"
 
-          cp "$APK" "$GITHUB_WORKSPACE/apk/FrontlineCommander-debug.apk"
+          cp "$APK" "$GITHUB_WORKSPACE/apk/FRONTLINE-debug.apk"
 
       - name: Pubblica APK
         uses: actions/upload-artifact@v4
         with:
-          name: FrontlineCommander-APK
-          path: apk/FrontlineCommander-debug.apk
+          name: FRONTLINE-APK
+          path: apk/FRONTLINE-debug.apk
           if-no-files-found: error
