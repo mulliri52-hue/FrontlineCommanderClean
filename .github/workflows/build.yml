@@ -9,7 +9,7 @@ jobs:
 
     steps:
       - name: Scarica il repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Installa Java 17
         uses: actions/setup-java@v5
@@ -18,7 +18,7 @@ jobs:
           java-version: '17'
           cache: ''
 
-      - name: Controlla il progetto Android
+      - name: Estrai il progetto Android
         shell: bash
         run: |
           set -e
@@ -38,6 +38,27 @@ jobs:
           unzip -q "$ZIP" -d android-project
 
           echo "Progetto estratto correttamente."
+
+      - name: Aggiorna Gradle a 8.13
+        shell: bash
+        run: |
+          set -e
+
+          WRAPPER="$(find android-project -type f -name "gradle-wrapper.properties" | head -1)"
+
+          if [ -z "$WRAPPER" ]; then
+            echo "ERRORE: gradle-wrapper.properties non trovato."
+            find android-project -maxdepth 8 -type f | sort
+            exit 1
+          fi
+
+          echo "Wrapper Gradle trovato:"
+          echo "$WRAPPER"
+
+          sed -i 's#distributionUrl=.*#distributionUrl=https\\://services.gradle.org/distributions/gradle-8.13-bin.zip#' "$WRAPPER"
+
+          echo "Nuova configurazione Gradle:"
+          cat "$WRAPPER"
 
       - name: Trova il progetto Gradle
         shell: bash
@@ -81,8 +102,15 @@ jobs:
 
           cd "$PROJECT_DIR"
 
+          if [ ! -f "./gradlew" ]; then
+            echo "ERRORE: gradlew non trovato."
+            find . -maxdepth 5 -type f | sort
+            exit 1
+          fi
+
           chmod +x ./gradlew
 
+          echo "Versione Gradle:"
           ./gradlew --version
 
       - name: Compila APK
@@ -99,10 +127,14 @@ jobs:
         run: |
           set -e
 
-          APK="$(find "$PROJECT_DIR" -type f -name "*.apk" | head -1)"
+          APK="$(find "$PROJECT_DIR" -type f -path "*/build/outputs/apk/debug/*.apk" | head -1)"
 
           if [ -z "$APK" ]; then
             echo "ERRORE: nessun APK generato."
+
+            echo "File APK eventualmente presenti:"
+            find "$PROJECT_DIR" -type f -name "*.apk" | sort
+
             exit 1
           fi
 
