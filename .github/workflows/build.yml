@@ -19,44 +19,65 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
 
-      - name: Estrai il progetto Android
+      - name: Trova ed estrai il progetto Android
         shell: bash
         run: |
           set -e
+
           mkdir -p extracted
-          ZIP_FILE="$(find . -maxdepth 2 -type f -iname '*.zip' | head -n 1)"
+
+          ZIP_FILE="$(find . -type f -iname '*.zip' \
+            -not -path './.git/*' \
+            -not -path './extracted/*' | head -n 1)"
+
           if [ -z "$ZIP_FILE" ]; then
             echo "ERRORE: nessun file ZIP trovato nel repository."
             exit 1
           fi
-          echo "ZIP trovato: $ZIP_FILE"
+
+          echo "ZIP trovato:"
+          echo "$ZIP_FILE"
+
           unzip -q "$ZIP_FILE" -d extracted
+
+          echo "Progetto estratto correttamente."
 
       - name: Trova il progetto Gradle
         id: project
         shell: bash
         run: |
           set -e
+
           GRADLEW="$(find extracted -type f -name 'gradlew' | head -n 1)"
+
           if [ -z "$GRADLEW" ]; then
-            echo "ERRORE: gradlew non trovato nel progetto estratto."
+            echo "ERRORE: gradlew non trovato."
+            echo "Contenuto estratto:"
+            find extracted -maxdepth 5 -type f | head -n 200
             exit 1
           fi
+
           PROJECT_DIR="$(dirname "$GRADLEW")"
-          echo "Progetto trovato in: $PROJECT_DIR"
+
+          echo "Progetto Gradle trovato:"
+          echo "$PROJECT_DIR"
+
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
 
       - name: Prepara Gradle Wrapper
         shell: bash
         run: |
+          set -e
+
           chmod +x "${{ steps.project.outputs.project_dir }}/gradlew"
 
       - name: Compila APK Debug
         shell: bash
         working-directory: ${{ steps.project.outputs.project_dir }}
         run: |
+          set -e
+
           ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Trova APK generato
@@ -64,13 +85,24 @@ jobs:
         shell: bash
         run: |
           set -e
-          APK="$(find "${{ steps.project.outputs.project_dir }}/app/build/outputs/apk/debug" -type f -name '*.apk' | head -n 1)"
+
+          APK_DIR="${{ steps.project.outputs.project_dir }}/app/build/outputs/apk/debug"
+
+          APK="$(find "$APK_DIR" -type f -name '*.apk' | head -n 1)"
+
           if [ -z "$APK" ]; then
-            echo "ERRORE: compilazione riuscita ma APK non trovato."
-            find "${{ steps.project.outputs.project_dir }}/app/build/outputs" -type f 2>/dev/null || true
+            echo "ERRORE: compilazione completata ma APK non trovato."
+
+            echo "File presenti nella cartella outputs:"
+            find "${{ steps.project.outputs.project_dir }}/app/build/outputs" \
+              -type f 2>/dev/null || true
+
             exit 1
           fi
-          echo "APK trovato: $APK"
+
+          echo "APK trovato:"
+          echo "$APK"
+
           echo "apk_path=$APK" >> "$GITHUB_OUTPUT"
 
       - name: Pubblica APK
