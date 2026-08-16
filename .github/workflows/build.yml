@@ -1,0 +1,124 @@
+name: Frontline Commander - Crea APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  costruire:
+    name: Crea APK Android
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Scarica il repository
+        uses: actions/checkout@v4
+
+      - name: Installa Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: Temurin
+          java-version: "17"
+
+      - name: Trova ed estrai FRONTLINE_READY.zip
+        shell: bash
+        run: |
+          set -e
+
+          ZIP="$(find . -type f -iname 'FRONTLINE_READY.zip' -print -quit)"
+
+          if [ -z "$ZIP" ]; then
+            echo "ERRORE: FRONTLINE_READY.zip non trovato."
+            echo "File presenti nel repository:"
+            find . -maxdepth 3 -type f -print
+            exit 1
+          fi
+
+          echo "ZIP trovato: $ZIP"
+
+          rm -rf estratto
+          mkdir -p estratto
+
+          unzip -q "$ZIP" -d estratto
+
+          echo "Contenuto estratto:"
+          find estratto -maxdepth 4 -type f -print
+
+      - name: Trova il progetto Android
+        shell: bash
+        run: |
+          set -e
+
+          PROJECT="$(find estratto -type f \( \
+            -name 'settings.gradle' -o \
+            -name 'settings.gradle.kts' \
+          \) -print -quit | xargs -r dirname)"
+
+          if [ -z "$PROJECT" ]; then
+            echo "ERRORE: progetto Android non trovato."
+            find estratto -maxdepth 5 -type f -print
+            exit 1
+          fi
+
+          echo "PROJECT_DIR=$PROJECT" >> "$GITHUB_ENV"
+          echo "Progetto Android trovato: $PROJECT"
+
+      - name: Controlla la struttura
+        shell: bash
+        run: |
+          set -e
+
+          test -f "$PROJECT_DIR/settings.gradle" \
+            || test -f "$PROJECT_DIR/settings.gradle.kts"
+
+          test -f "$PROJECT_DIR/build.gradle" \
+            || test -f "$PROJECT_DIR/build.gradle.kts"
+
+          test -f "$PROJECT_DIR/app/build.gradle" \
+            || test -f "$PROJECT_DIR/app/build.gradle.kts"
+
+          echo "Struttura progetto OK."
+
+      - name: Prepara Gradle Wrapper
+        shell: bash
+        run: |
+          set -e
+          cd "$PROJECT_DIR"
+
+          if [ ! -f "gradlew" ]; then
+            echo "Gradle Wrapper non presente: lo genero."
+            gradle wrapper
+          fi
+
+          chmod +x gradlew
+
+      - name: Compila APK Debug
+        shell: bash
+        run: |
+          set -e
+          cd "$PROJECT_DIR"
+
+          ./gradlew --no-daemon --stacktrace assembleDebug
+
+      - name: Trova APK generato
+        shell: bash
+        run: |
+          set -e
+
+          APK="$(find "$PROJECT_DIR/app/build/outputs/apk" -type f -name '*.apk' -print -quit)"
+
+          if [ -z "$APK" ]; then
+            echo "ERRORE: APK non generato."
+            exit 1
+          fi
+
+          echo "APK=$APK" >> "$GITHUB_ENV"
+          echo "APK generato: $APK"
+
+      - name: Pubblica APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: FrontlineCommander-debug
+          path: ${{ env.APK }}
+          if-no-files-found: error
