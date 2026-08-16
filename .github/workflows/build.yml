@@ -38,11 +38,11 @@ jobs:
         run: |
           set -e
 
-          ZIP="$(find . -maxdepth 3 -type f -iname 'FRONTLINE_READY.zip' -print -quit)"
+          ZIP=$(find . -maxdepth 3 -type f -iname 'FRONTLINE_READY.zip' -print -quit)
 
           if [ -z "$ZIP" ]; then
             echo "ERRORE: FRONTLINE_READY.zip non trovato."
-            echo "File presenti nel repository:"
+            echo "File presenti:"
             find . -maxdepth 3 -type f -print
             exit 1
           fi
@@ -68,19 +68,25 @@ jobs:
         run: |
           set -e
 
-          PROJECT_DIR="$(
-            find estratto -type f \
-              -name 'settings.gradle' -o -name 'settings.gradle.kts' \
-              -print -quit \
-              | xargs -r dirname
-          )"
+          PROJECT_DIR=""
+
+          SETTINGS_FILE=$(find estratto -type f -name 'settings.gradle' -print -quit)
+
+          if [ -n "$SETTINGS_FILE" ]; then
+            PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+          else
+            SETTINGS_FILE=$(find estratto -type f -name 'settings.gradle.kts' -print -quit)
+
+            if [ -n "$SETTINGS_FILE" ]; then
+              PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+            fi
+          fi
 
           if [ -z "$PROJECT_DIR" ]; then
             echo "ERRORE: progetto Android non trovato."
-            echo "Cerco i file Gradle disponibili:"
-            find estratto -type f \
-              -name 'settings.gradle*' -o -name 'build.gradle*' \
-              -print
+            echo "File Gradle trovati:"
+            find estratto -type f -name 'settings.gradle' -print
+            find estratto -type f -name 'settings.gradle.kts' -print
             exit 1
           fi
 
@@ -92,16 +98,25 @@ jobs:
         run: |
           set -e
 
-          test -f "$PROJECT_DIR/settings.gradle" \
-            || test -f "$PROJECT_DIR/settings.gradle.kts"
+          if [ ! -f "$PROJECT_DIR/settings.gradle" ] && [ ! -f "$PROJECT_DIR/settings.gradle.kts" ]; then
+            echo "ERRORE: settings.gradle non trovato."
+            exit 1
+          fi
 
-          test -f "$PROJECT_DIR/build.gradle" \
-            || test -f "$PROJECT_DIR/build.gradle.kts"
+          if [ ! -f "$PROJECT_DIR/build.gradle" ] && [ ! -f "$PROJECT_DIR/build.gradle.kts" ]; then
+            echo "ERRORE: build.gradle non trovato."
+            exit 1
+          fi
 
-          test -f "$PROJECT_DIR/app/build.gradle" \
-            || test -f "$PROJECT_DIR/app/build.gradle.kts"
+          if [ ! -f "$PROJECT_DIR/app/build.gradle" ] && [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
+            echo "ERRORE: app/build.gradle non trovato."
+            exit 1
+          fi
 
-          test -d "$PROJECT_DIR/app/src/main"
+          if [ ! -d "$PROJECT_DIR/app/src/main" ]; then
+            echo "ERRORE: app/src/main non trovato."
+            exit 1
+          fi
 
           echo "Struttura progetto OK."
 
@@ -116,7 +131,7 @@ jobs:
             echo "USE_WRAPPER=true" >> "$GITHUB_ENV"
           else
             echo "Gradle Wrapper non trovato."
-            echo "Verrà utilizzato Gradle 8.11.1 installato nel runner."
+            echo "Verrà utilizzato Gradle 8.11.1."
             echo "USE_WRAPPER=false" >> "$GITHUB_ENV"
           fi
 
@@ -138,18 +153,21 @@ jobs:
         run: |
           set -e
 
-          APK="$(
-            find "$PROJECT_DIR/app/build/outputs/apk" \
-              -type f \
-              -name '*.apk' \
-              -print -quit
-          )"
+          APK=$(find "$PROJECT_DIR/app/build/outputs/apk" -type f -name '*.apk' -print -quit)
 
           if [ -z "$APK" ]; then
             echo "ERRORE: APK non generato."
-            echo "Contenuto della cartella build:"
             find "$PROJECT_DIR/app/build" -maxdepth 6 -type f -print || true
             exit 1
           fi
 
-         
+          echo "APK generato: $APK"
+          echo "APK=$APK" >> "$GITHUB_ENV"
+
+      - name: Pubblica APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: FrontlineCommander-debug
+          path: ${{ env.APK }}
+          if-no-files-found: error
+          retention-days: 7
