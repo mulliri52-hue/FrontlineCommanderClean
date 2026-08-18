@@ -23,24 +23,24 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
-
-      - name: Installa Gradle
-        uses: gradle/actions/setup-gradle@v4
 
       - name: Trova FRONTLINE_READY.zip
         shell: bash
         run: |
           set -e
 
-          ZIP_FILE="$(find "$GITHUB_WORKSPACE" -maxdepth 2 -type f -name 'FRONTLINE_READY.zip' | head -n 1)"
+          ZIP_FILE="$(find "$GITHUB_WORKSPACE" -maxdepth 3 -type f -name 'FRONTLINE_READY.zip' | head -n 1)"
 
           if [ -z "$ZIP_FILE" ]; then
             echo "ERRORE: FRONTLINE_READY.zip non trovato."
+            echo "File presenti nel repository:"
+            find "$GITHUB_WORKSPACE" -maxdepth 3 -type f | sort
             exit 1
           fi
 
-          echo "ZIP trovato: $ZIP_FILE"
+          echo "ZIP trovato:"
+          echo "$ZIP_FILE"
+
           echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
 
       - name: Estrai il progetto Android
@@ -48,25 +48,25 @@ jobs:
         run: |
           set -e
 
-          rm -rf extracted
-          mkdir -p extracted
+          rm -rf "$GITHUB_WORKSPACE/extracted"
+          mkdir -p "$GITHUB_WORKSPACE/extracted"
 
-          unzip -q "$ZIP_FILE" -d extracted
+          unzip -q "$ZIP_FILE" -d "$GITHUB_WORKSPACE/extracted"
 
-          echo "Contenuto estratto:"
-          find extracted -maxdepth 3 -type f | head -100
+          echo "Progetto estratto."
+          find "$GITHUB_WORKSPACE/extracted" -maxdepth 3 -type f | sort | head -150
 
       - name: Trova il progetto Gradle
         shell: bash
         run: |
           set -e
 
-          GRADLEW="$(find "$GITHUB_WORKSPACE/extracted" -type f -name gradlew | head -n 1)"
+          GRADLEW="$(find "$GITHUB_WORKSPACE/extracted" -type f -name 'gradlew' -print -quit)"
 
           if [ -z "$GRADLEW" ]; then
-            echo "ERRORE: gradlew non trovato nel progetto estratto."
-            echo "Struttura trovata:"
-            find "$GITHUB_WORKSPACE/extracted" -maxdepth 5 -type f | sort | head -300
+            echo "ERRORE: gradlew non trovato."
+            echo "Struttura del progetto estratto:"
+            find "$GITHUB_WORKSPACE/extracted" -maxdepth 6 -type f | sort | head -300
             exit 1
           fi
 
@@ -122,14 +122,14 @@ jobs:
         run: |
           set -e
 
-          APK="$(find "$PROJECT_DIR" -type f -name '*.apk' | head -n 1)"
+          APK="$(find "$PROJECT_DIR" -type f -name '*.apk' -print -quit)"
 
           if [ -z "$APK" ]; then
-            echo "ERRORE: nessun APK generato."
+            echo "ERRORE: APK non generato."
             exit 1
           fi
 
-          echo "APK trovato:"
+          echo "APK generato:"
           echo "$APK"
 
           echo "APK_PATH=$APK" >> "$GITHUB_ENV"
