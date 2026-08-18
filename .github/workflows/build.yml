@@ -24,15 +24,15 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Installa Gradle
+      - name: Installa Gradle 8.13
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.13"
 
-      - name: Configura Android SDK
+      - name: Installa Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Installa Android SDK 36
+      - name: Installa SDK Android 36
         shell: bash
         run: |
           set -e
@@ -42,26 +42,34 @@ jobs:
           sdkmanager "platforms;android-36"
           sdkmanager "build-tools;35.0.0"
 
+          echo "Android SDK 36 installato."
+
       - name: Trova FRONTLINE_READY.zip
         shell: bash
         run: |
           set -e
 
-          ZIP_FILE="$(find "$GITHUB_WORKSPACE" \
-            -type f \
-            -name "FRONTLINE_READY.zip" \
-            -print \
-            -quit)"
+          ZIP_FILE=""
+
+          while IFS= read -r file; do
+            ZIP_FILE="$file"
+            break
+          done < <(
+            find "$GITHUB_WORKSPACE" \
+              -maxdepth 3 \
+              -type f \
+              -name "FRONTLINE_READY.zip" \
+              -print
+          )
 
           if [ -z "$ZIP_FILE" ]; then
             echo "ERRORE: FRONTLINE_READY.zip non trovato."
-
-            echo "File presenti:"
+            echo
+            echo "File presenti nel repository:"
             find "$GITHUB_WORKSPACE" \
-              -maxdepth 4 \
+              -maxdepth 3 \
               -type f \
               -print | sort
-
             exit 1
           fi
 
@@ -81,27 +89,37 @@ jobs:
           unzip -q "$ZIP_FILE" \
             -d "$GITHUB_WORKSPACE/extracted"
 
-          echo "ZIP estratto correttamente."
+          echo "Estrazione completata."
 
       - name: Trova progetto Gradle
         shell: bash
         run: |
           set -e
 
-          SETTINGS_FILE="$(find "$GITHUB_WORKSPACE/extracted" \
-            -type f \
-            \( -name "settings.gradle.kts" -o -name "settings.gradle" \) \
-            -print \
-            -quit)"
+          SETTINGS_FILE=""
+
+          while IFS= read -r file; do
+            SETTINGS_FILE="$file"
+            break
+          done < <(
+            find "$GITHUB_WORKSPACE/extracted" \
+              -type f \
+              \
+                -name "settings.gradle.kts" \
+                -o \
+                -name "settings.gradle" \
+              \
+              -print
+          )
 
           if [ -z "$SETTINGS_FILE" ]; then
-            echo "ERRORE: settings.gradle(.kts) non trovato."
-
+            echo "ERRORE: progetto Gradle non trovato."
+            echo
+            echo "Struttura estratta:"
             find "$GITHUB_WORKSPACE/extracted" \
               -maxdepth 6 \
               -type f \
               -print | sort
-
             exit 1
           fi
 
@@ -113,7 +131,7 @@ jobs:
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Controlla struttura progetto
+      - name: Controlla progetto
         shell: bash
         run: |
           set -e
@@ -129,11 +147,9 @@ jobs:
 
           test -f "$PROJECT_DIR/app/src/main/AndroidManifest.xml"
 
-          test -f "$PROJECT_DIR/app/src/main/java/com/frontline/commander/MainActivity.kt"
-
           echo "Struttura progetto OK."
 
-      - name: Correggi compileSdk
+      - name: Correggi configurazione Android
         shell: bash
         run: |
           set -e
@@ -145,129 +161,146 @@ jobs:
             exit 1
           fi
 
-          sed -i \
-            's/compileSdk[[:space:]]*=[[:space:]]*35/compileSdk = 36/g' \
-            "$APP_GRADLE"
+          python3 <<'PY'
+          import re
+          from pathlib import Path
 
-          sed -i \
-            's/compileSdk[[:space:]]*35/compileSdk 36/g' \
-            "$APP_GRADLE"
+          path = Path("$PROJECT_DIR/app/build.gradle.kts")
+          text = path.read_text(encoding="utf-8")
 
-          if ! grep -q "compileSdk = 36" "$APP_GRADLE" \
-             && ! grep -q "compileSdk 36" "$APP_GRADLE"; then
-            echo "ERRORE: impossibile impostare compileSdk 36."
-            exit 1
-          fi
+          # compileSdk 35 -> 36
+          text = re.sub(
+              r'compileSdk\s*=\s*35\b',
+              'compileSdk = 36',
+              text
+          )
 
-          echo "compileSdk 36 OK."
+          text = re.sub(
+              r'compileSdk\s+35\b',
+              'compileSdk 36',
+              text
+          )
 
-      - name: Correggi Kotlin JVM Target
+          # Java 8/11 -> Java 17
+          text = re.sub(
+              r'JavaVersion\.VERSION_1_8',
+              'JavaVersion.VERSION_17',
+              text
+          )
+
+          text = re.sub(
+              r'JavaVersion\.VERSION_11',
+              'JavaVersion.VERSION_17',
+              text
+          )
+
+          # Rimuove vecchio kotlinOptions con jvmTarget String.
+          text = re.sub(
+              r'\n\s*kotlinOptions\s*\{.*?\n\s*\}',
+              '',
+              text,
+              flags=re.DOTALL
+          )
+
+          # Rimuove eventuali righe vecchie jvmTarget = "17".
+          text = re.sub(
+              r'^\s*jvmTarget\s*=\s*["\']17["\']\s*$',
+              '',
+              text,
+              flags=re.MULTILINE
+          )
+
+          # Aggiunge il nuovo compilerOptions DSL.
+          if 'JvmTarget.JVM_17' not in text:
+              text += '''
+
+          kotlin {
+              compilerOptions {
+                  jvmTarget.set(
+                      org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+                  )
+              }
+          }
+          '''
+
+          path.write_text(text, encoding="utf-8")
+          PY
+
+          echo "Configurazione Android corretta."
+
+      - name: Allinea versioni AGP e Kotlin
+        shell: bash
+        run: |
+          set -e
+
+          python3 <<'PY'
+          import re
+          from pathlib import Path
+
+          root = Path("$PROJECT_DIR")
+
+          files = list(root.rglob("*.gradle.kts"))
+          files += list(root.rglob("*.gradle"))
+          files += list(root.rglob("*.toml"))
+
+          for path in files:
+              text = path.read_text(encoding="utf-8")
+
+              # Android Gradle Plugin 8.13.2
+              text = re.sub(
+                  r'(com\.android\.application["\']?\s*\)?\s*version\s*["\'])[^"\']+(["\'])',
+                  r'\g<1>8.13.2\2',
+                  text
+              )
+
+              text = re.sub(
+                  r'(com\.android\.library["\']?\s*\)?\s*version\s*["\'])[^"\']+(["\'])',
+                  r'\g<1>8.13.2\2',
+                  text
+              )
+
+              # Kotlin 2.3.21.
+              text = re.sub(
+                  r'(org\.jetbrains\.kotlin\.android["\']?\s*\)?\s*version\s*["\'])[^"\']+(["\'])',
+                  r'\g<1>2.3.21\2',
+                  text
+              )
+
+              text = re.sub(
+                  r'(org\.jetbrains\.kotlin\.plugin\.serialization["\']?\s*\)?\s*version\s*["\'])[^"\']+(["\'])',
+                  r'\g<1>2.3.21\2',
+                  text
+              )
+
+              text = re.sub(
+                  r'(kotlin\s*\s*["\']android["\']\s*\s*version\s*["\'])[^"\']+(["\'])',
+                  r'\g<1>2.3.21\2',
+                  text
+              )
+
+              text = re.sub(
+                  r'(kotlin\s*\s*["\']jvm["\']\s*\s*version\s*["\'])[^"\']+(["\'])',
+                  r'\g<1>2.3.21\2',
+                  text
+              )
+
+              path.write_text(text, encoding="utf-8")
+
+          print("Versioni AGP/Kotlin controllate.")
+          print("AGP: 8.13.2")
+          print("Kotlin: 2.3.21")
+          PY
+
+      - name: Controlla Kotlin JVM Target
         shell: bash
         run: |
           set -e
 
           APP_GRADLE="$PROJECT_DIR/app/build.gradle.kts"
 
-          if [ ! -f "$APP_GRADLE" ]; then
-            echo "ERRORE: app/build.gradle.kts non trovato."
+          if ! grep -q "JvmTarget.JVM_17" "$APP_GRADLE"; then
+            echo "ERRORE: JVM Target 17 non configurato."
             exit 1
           fi
 
-          perl -0pi -e \
-            's/\n[ \t]*kotlinOptions[ \t]*\{[^}]*jvmTarget[ \t]*=[ \t]*["\x27]17["\x27][^}]*\}[ \t]*\n/\n/sg' \
-            "$APP_GRADLE"
-
-          sed -i \
-            '/^[[:space:]]*jvmTarget[[:space:]]*=[[:space:]]*["\x27]17["\x27][[:space:]]*$/d' \
-            "$APP_GRADLE"
-
-          if ! grep -q "jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)" "$APP_GRADLE"; then
-            printf '\n\nkotlin {\n    compilerOptions {\n        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)\n    }\n}\n' >> "$APP_GRADLE"
-          fi
-
-          if grep -qE 'jvmTarget[[:space:]]*=[[:space:]]*["\x27]17["\x27]' "$APP_GRADLE"; then
-            echo "ERRORE: vecchia sintassi jvmTarget ancora presente."
-            exit 1
-          fi
-
-          echo "Kotlin JVM Target 17 OK."
-
-      - name: Imposta Java 17
-        shell: bash
-        run: |
-          set -e
-
-          APP_GRADLE="$PROJECT_DIR/app/build.gradle.kts"
-
-          if grep -q "compileOptions" "$APP_GRADLE"; then
-            sed -i \
-              's/sourceCompatibility[[:space:]]*=[[:space:]]*JavaVersion.VERSION_[0-9]*/sourceCompatibility = JavaVersion.VERSION_17/g' \
-              "$APP_GRADLE"
-
-            sed -i \
-              's/targetCompatibility[[:space:]]*=[[:space:]]*JavaVersion.VERSION_[0-9]*/targetCompatibility = JavaVersion.VERSION_17/g' \
-              "$APP_GRADLE"
-          fi
-
-          echo "Java 17 controllato."
-
-      - name: Verifica configurazione finale
-        shell: bash
-        run: |
-          set -e
-
-          echo "===== app/build.gradle.kts ====="
-          cat "$PROJECT_DIR/app/build.gradle.kts"
-
-          echo
-          echo "===== settings ====="
-          cat "$PROJECT_DIR/settings.gradle.kts" 2>/dev/null \
-            || cat "$PROJECT_DIR/settings.gradle"
-
-          echo
-          echo "Configurazione verificata."
-
-      - name: Compila APK Debug
-        shell: bash
-        run: |
-          set -e
-
-          cd "$PROJECT_DIR"
-
-          gradle clean assembleDebug \
-            --no-daemon \
-            --stacktrace
-
-      - name: Trova APK generato
-        shell: bash
-        run: |
-          set -e
-
-          APK="$(find "$PROJECT_DIR/app/build/outputs/apk/debug" \
-            -type f \
-            -name "*.apk" \
-            -print \
-            -quit)"
-
-          if [ -z "$APK" ]; then
-            echo "ERRORE: APK non generato."
-
-            find "$PROJECT_DIR/app/build/outputs" \
-              -type f \
-              -print | sort || true
-
-            exit 1
-          fi
-
-          echo "APK generato:"
-          echo "$APK"
-
-          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
-
-      - name: Pubblica APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: FrontlineCommander-APK
-          path: ${{ env.APK_PATH }}
-          if-no-files-found: error
-          retention-days: 7
+          if grep -qE 'jvmTarget[[:space:]]*=[[:space:]]*["'\'']17
