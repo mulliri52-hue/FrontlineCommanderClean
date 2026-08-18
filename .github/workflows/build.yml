@@ -12,19 +12,19 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Scarica il repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Installa Java 17
+      - name: Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Installa Gradle 8.11.1
+      - name: Gradle 8.13
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.11.1'
+          gradle-version: '8.13'
 
       - name: Trova FRONTLINE_READY.zip
         shell: bash
@@ -35,58 +35,61 @@ jobs:
 
           if [ -z "$ZIP" ]; then
             echo "ERRORE: FRONTLINE_READY.zip non trovato."
-            find . -maxdepth 3 -type f -print
             exit 1
           fi
 
           echo "ZIP trovato: $ZIP"
           echo "ZIP=$ZIP" >> "$GITHUB_ENV"
 
-      - name: Estrai il progetto Android
+      - name: Estrai progetto
         shell: bash
         run: |
           set -e
 
           rm -rf extracted
           mkdir -p extracted
-
           unzip -q "$ZIP" -d extracted
 
-          echo "Progetto estratto."
-
-      - name: Trova il progetto Android
+      - name: Trova progetto Android
         shell: bash
         run: |
           set -e
 
-          SETTINGS_FILE="$(find extracted -type f \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) -print -quit)"
+          SETTINGS_FILE="$(find extracted -type f \
+            -name 'settings.gradle' \
+            -o \
+            -name 'settings.gradle.kts' \
+          -print -quit)"
 
           if [ -z "$SETTINGS_FILE" ]; then
-            echo "ERRORE: progetto Android non trovato."
+            echo "ERRORE: settings.gradle non trovato."
             exit 1
           fi
 
           PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
           PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
 
-          echo "Progetto Android trovato:"
-          echo "$PROJECT_DIR"
-
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Controlla struttura progetto
+          echo "Progetto:"
+          echo "$PROJECT_DIR"
+
+      - name: Controllo struttura
         shell: bash
         run: |
           set -e
 
-          test -f "$PROJECT_DIR/settings.gradle" || test -f "$PROJECT_DIR/settings.gradle.kts"
-          test -f "$PROJECT_DIR/build.gradle" || test -f "$PROJECT_DIR/build.gradle.kts"
-          test -f "$PROJECT_DIR/app/build.gradle" || test -f "$PROJECT_DIR/app/build.gradle.kts"
+          test -f "$PROJECT_DIR/settings.gradle" \
+            || test -f "$PROJECT_DIR/settings.gradle.kts"
+
+          test -f "$PROJECT_DIR/app/build.gradle" \
+            || test -f "$PROJECT_DIR/app/build.gradle.kts"
+
           test -d "$PROJECT_DIR/app/src/main"
 
-          echo "Struttura progetto OK."
+          echo "Struttura OK."
 
-      - name: Correggi configurazione Android e Kotlin
+      - name: Controlla configurazione Android
         shell: bash
         run: |
           set -e
@@ -98,9 +101,6 @@ jobs:
             exit 1
           fi
 
-          echo "Configurazione originale:"
-          nl -ba "$APP_GRADLE" | sed -n '1,100p'
-
           python3 - "$APP_GRADLE" <<'PY'
           import re
           import sys
@@ -109,28 +109,20 @@ jobs:
           path = Path(sys.argv[1])
           text = path.read_text(encoding="utf-8")
 
-          # ---------------------------------------------------------
-          # 1. compileSdk -> 36
-          # ---------------------------------------------------------
-
-          text, count = re.subn(
+          # compileSdk 36
+          text = re.sub(
               r'(\bcompileSdk(?:Version)?\s*=\s*)\d+',
               r'\g<1>36',
               text
           )
 
-          # Gestisce anche la forma:
-          # compileSdk(35)
-          text, count2 = re.subn(
-              r'(\bcompileSdk\s*\(\s*)\d+(\s*\))',
+          text = re.sub(
+              r'(\bcompileSdk\s*\s*)\d+(\s*)',
               r'\g<1>36\g<2>',
               text
           )
 
-          # ---------------------------------------------------------
-          # 2. Rimuove vecchio kotlinOptions
-          # ---------------------------------------------------------
-
+          # Rimuove vecchio kotlinOptions
           text = re.sub(
               r'\n[ \t]*kotlinOptions[ \t]*\{.*?\n[ \t]*\}',
               '',
@@ -138,120 +130,12 @@ jobs:
               flags=re.DOTALL
           )
 
-          # Rimuove eventuali righe rimaste
+          # Rimuove vecchio jvmTarget String
           text = re.sub(
               r'(?m)^[ \t]*jvmTarget[ \t]*=[ \t]*["\']17["\'][ \t]*\r?\n',
               '',
               text
           )
 
-          # ---------------------------------------------------------
-          # 3. Aggiunge compilerOptions moderna
-          # ---------------------------------------------------------
-
-          compiler_line = (
-              'jvmTarget.set('
-              'org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17'
-              ')'
-          )
-
-          if compiler_line not in text:
-              text = text.rstrip() + '''
-
-          kotlin {
-              compilerOptions {
-                  jvmTarget.set(
-                      org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
-                  )
-              }
-          }
-          '''
-
-          # ---------------------------------------------------------
-          # 4. Controlli finali
-          # ---------------------------------------------------------
-
-          compile_values = re.findall(
-              r'\bcompileSdk(?:Version)?\s*=\s*(\d+)',
-              text
-          )
-
-          if compile_values and any(int(v) < 36 for v in compile_values):
-              raise SystemExit(
-                  "ERRORE: compileSdk è ancora inferiore a 36."
-              )
-
-          if re.search(
-              r'jvmTarget\s*=\s*["\']17["\']',
-              text
-          ):
-              raise SystemExit(
-                  "ERRORE: è rimasta la vecchia sintassi jvmTarget."
-              )
-
-          path.write_text(text, encoding="utf-8")
-
-          print("Correzione Android/Kotlin completata.")
-          print("compileSdk impostato a 36.")
-          print("Kotlin compilerOptions JVM 17 configurato.")
-          PY
-
-          echo
-          echo "Configurazione finale:"
-          nl -ba "$APP_GRADLE" | sed -n '1,120p'
-
-      - name: Controlla Gradle Wrapper
-        shell: bash
-        run: |
-          set -e
-
-          if [ -f "$PROJECT_DIR/gradlew" ]; then
-            echo "Gradle Wrapper trovato."
-            chmod +x "$PROJECT_DIR/gradlew"
-            echo "USE_WRAPPER=true" >> "$GITHUB_ENV"
-          else
-            echo "Gradle Wrapper non presente."
-            echo "Uso Gradle 8.11.1 installato da GitHub Actions."
-            echo "USE_WRAPPER=false" >> "$GITHUB_ENV"
-          fi
-
-      - name: Compila APK Debug
-        shell: bash
-        run: |
-          set -e
-
-          cd "$PROJECT_DIR"
-
-          if [ "$USE_WRAPPER" = "true" ]; then
-            ./gradlew clean assembleDebug --no-daemon --stacktrace
-          else
-            gradle clean assembleDebug --no-daemon --stacktrace
-          fi
-
-      - name: Trova APK generato
-        shell: bash
-        run: |
-          set -e
-
-          APK="$(find "$PROJECT_DIR/app/build/outputs/apk" \
-            -type f -name '*.apk' -print -quit)"
-
-          if [ -z "$APK" ]; then
-            echo "ERRORE: APK non generato."
-            find "$PROJECT_DIR/app/build" \
-              -maxdepth 6 -type f -print || true
-            exit 1
-          fi
-
-          echo "APK generato:"
-          echo "$APK"
-
-          echo "APK=$APK" >> "$GITHUB_ENV"
-
-      - name: Pubblica APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: FrontlineCommander-debug
-          path: ${{ env.APK }}
-          if-no-files-found: error
-          retention-days: 7
+          # Aggiunge compilerOptions moderna
+          compiler = """k
