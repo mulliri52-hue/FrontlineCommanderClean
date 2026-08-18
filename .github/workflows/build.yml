@@ -1,4 +1,4 @@
-name: Crea APK Android
+name: Frontline Commander - Crea APK
 
 on:
   workflow_dispatch:
@@ -14,10 +14,6 @@ jobs:
     name: Crea APK Android
     runs-on: ubuntu-latest
 
-    env:
-      GRADLE_VERSION: "8.11.1"
-      ZIP_NAME: "FRONTLINE_READY.zip"
-
     steps:
       - name: Scarica il repository
         uses: actions/checkout@v4
@@ -28,49 +24,39 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Installa Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.13"
+
+      - name: Configura Android SDK
+        uses: android-actions/setup-android@v3
+
       - name: Installa Android SDK 36
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
-          SDKMANAGER="$(command -v sdkmanager || true)"
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
 
-          if [ -z "$SDKMANAGER" ]; then
-            SDKMANAGER="$(find "${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/opt/android-sdk}}" \
-              -type f \
-              -name sdkmanager \
-              -print \
-              -quit 2>/dev/null || true)"
-          fi
-
-          if [ -z "$SDKMANAGER" ] || [ ! -x "$SDKMANAGER" ]; then
-            echo "ERRORE: sdkmanager non trovato."
-            exit 1
-          fi
-
-          echo "sdkmanager: $SDKMANAGER"
-
-          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
-
-          "$SDKMANAGER" \
-            "platforms;android-36" \
-            "build-tools;35.0.0"
+          sdkmanager "platforms;android-36"
+          sdkmanager "build-tools;35.0.0"
 
       - name: Trova FRONTLINE_READY.zip
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
 
           ZIP_FILE="$(find "$GITHUB_WORKSPACE" \
             -type f \
-            -name "$ZIP_NAME" \
+            -name "FRONTLINE_READY.zip" \
             -print \
             -quit)"
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERRORE: $ZIP_NAME non trovato."
+            echo "ERRORE: FRONTLINE_READY.zip non trovato."
 
-            echo "File disponibili nel repository:"
+            echo "File presenti:"
             find "$GITHUB_WORKSPACE" \
               -maxdepth 4 \
               -type f \
@@ -82,4 +68,206 @@ jobs:
           echo "ZIP trovato:"
           echo "$ZIP_FILE"
 
-          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV
+          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
+
+      - name: Estrai progetto Android
+        shell: bash
+        run: |
+          set -e
+
+          rm -rf "$GITHUB_WORKSPACE/extracted"
+          mkdir -p "$GITHUB_WORKSPACE/extracted"
+
+          unzip -q "$ZIP_FILE" \
+            -d "$GITHUB_WORKSPACE/extracted"
+
+          echo "ZIP estratto correttamente."
+
+      - name: Trova progetto Gradle
+        shell: bash
+        run: |
+          set -e
+
+          SETTINGS_FILE="$(find "$GITHUB_WORKSPACE/extracted" \
+            -type f \
+            \( -name "settings.gradle.kts" -o -name "settings.gradle" \) \
+            -print \
+            -quit)"
+
+          if [ -z "$SETTINGS_FILE" ]; then
+            echo "ERRORE: settings.gradle(.kts) non trovato."
+
+            find "$GITHUB_WORKSPACE/extracted" \
+              -maxdepth 6 \
+              -type f \
+              -print | sort
+
+            exit 1
+          fi
+
+          PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
+          PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
+
+          echo "Progetto Gradle:"
+          echo "$PROJECT_DIR"
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Controlla struttura progetto
+        shell: bash
+        run: |
+          set -e
+
+          test -f "$PROJECT_DIR/settings.gradle.kts" \
+            || test -f "$PROJECT_DIR/settings.gradle"
+
+          test -f "$PROJECT_DIR/build.gradle.kts" \
+            || test -f "$PROJECT_DIR/build.gradle"
+
+          test -f "$PROJECT_DIR/app/build.gradle.kts" \
+            || test -f "$PROJECT_DIR/app/build.gradle"
+
+          test -f "$PROJECT_DIR/app/src/main/AndroidManifest.xml"
+
+          test -f "$PROJECT_DIR/app/src/main/java/com/frontline/commander/MainActivity.kt"
+
+          echo "Struttura progetto OK."
+
+      - name: Correggi compileSdk
+        shell: bash
+        run: |
+          set -e
+
+          APP_GRADLE="$PROJECT_DIR/app/build.gradle.kts"
+
+          if [ ! -f "$APP_GRADLE" ]; then
+            echo "ERRORE: app/build.gradle.kts non trovato."
+            exit 1
+          fi
+
+          sed -i \
+            's/compileSdk[[:space:]]*=[[:space:]]*35/compileSdk = 36/g' \
+            "$APP_GRADLE"
+
+          sed -i \
+            's/compileSdk[[:space:]]*35/compileSdk 36/g' \
+            "$APP_GRADLE"
+
+          if ! grep -q "compileSdk = 36" "$APP_GRADLE" \
+             && ! grep -q "compileSdk 36" "$APP_GRADLE"; then
+            echo "ERRORE: impossibile impostare compileSdk 36."
+            exit 1
+          fi
+
+          echo "compileSdk 36 OK."
+
+      - name: Correggi Kotlin JVM Target
+        shell: bash
+        run: |
+          set -e
+
+          APP_GRADLE="$PROJECT_DIR/app/build.gradle.kts"
+
+          if [ ! -f "$APP_GRADLE" ]; then
+            echo "ERRORE: app/build.gradle.kts non trovato."
+            exit 1
+          fi
+
+          perl -0pi -e \
+            's/\n[ \t]*kotlinOptions[ \t]*\{[^}]*jvmTarget[ \t]*=[ \t]*["\x27]17["\x27][^}]*\}[ \t]*\n/\n/sg' \
+            "$APP_GRADLE"
+
+          sed -i \
+            '/^[[:space:]]*jvmTarget[[:space:]]*=[[:space:]]*["\x27]17["\x27][[:space:]]*$/d' \
+            "$APP_GRADLE"
+
+          if ! grep -q "jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)" "$APP_GRADLE"; then
+            printf '\n\nkotlin {\n    compilerOptions {\n        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)\n    }\n}\n' >> "$APP_GRADLE"
+          fi
+
+          if grep -qE 'jvmTarget[[:space:]]*=[[:space:]]*["\x27]17["\x27]' "$APP_GRADLE"; then
+            echo "ERRORE: vecchia sintassi jvmTarget ancora presente."
+            exit 1
+          fi
+
+          echo "Kotlin JVM Target 17 OK."
+
+      - name: Imposta Java 17
+        shell: bash
+        run: |
+          set -e
+
+          APP_GRADLE="$PROJECT_DIR/app/build.gradle.kts"
+
+          if grep -q "compileOptions" "$APP_GRADLE"; then
+            sed -i \
+              's/sourceCompatibility[[:space:]]*=[[:space:]]*JavaVersion.VERSION_[0-9]*/sourceCompatibility = JavaVersion.VERSION_17/g' \
+              "$APP_GRADLE"
+
+            sed -i \
+              's/targetCompatibility[[:space:]]*=[[:space:]]*JavaVersion.VERSION_[0-9]*/targetCompatibility = JavaVersion.VERSION_17/g' \
+              "$APP_GRADLE"
+          fi
+
+          echo "Java 17 controllato."
+
+      - name: Verifica configurazione finale
+        shell: bash
+        run: |
+          set -e
+
+          echo "===== app/build.gradle.kts ====="
+          cat "$PROJECT_DIR/app/build.gradle.kts"
+
+          echo
+          echo "===== settings ====="
+          cat "$PROJECT_DIR/settings.gradle.kts" 2>/dev/null \
+            || cat "$PROJECT_DIR/settings.gradle"
+
+          echo
+          echo "Configurazione verificata."
+
+      - name: Compila APK Debug
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          gradle clean assembleDebug \
+            --no-daemon \
+            --stacktrace
+
+      - name: Trova APK generato
+        shell: bash
+        run: |
+          set -e
+
+          APK="$(find "$PROJECT_DIR/app/build/outputs/apk/debug" \
+            -type f \
+            -name "*.apk" \
+            -print \
+            -quit)"
+
+          if [ -z "$APK" ]; then
+            echo "ERRORE: APK non generato."
+
+            find "$PROJECT_DIR/app/build/outputs" \
+              -type f \
+              -print | sort || true
+
+            exit 1
+          fi
+
+          echo "APK generato:"
+          echo "$APK"
+
+          echo "APK_PATH=$APK" >> "$GITHUB_ENV"
+
+      - name: Pubblica APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: FrontlineCommander-APK
+          path: ${{ env.APK_PATH }}
+          if-no-files-found: error
+          retention-days: 7
